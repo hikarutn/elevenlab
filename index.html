@@ -914,14 +914,15 @@ document.querySelectorAll('.preset-voice-btn').forEach(btn => {
                 this.addCustomVoiceBtn.disabled = !voiceId || !this.apiKey;
             }
 
- async addCustomVoice() {
-  const voiceId = this.customVoiceIdInput.value.trim();
-  if (!voiceId) {
-    this.showError(this.keyStatus, 'Vui lòng nhập Voice ID');
-    return null;
-  }
-  if (!this.apiKey) {
-    this.showError(this.keyStatus, 'Vui lòng xác thực API key trước');
+async addCustomVoice() {
+  const raw = (this.customVoiceIdInput.value || "").trim();
+  if (!raw) { this.showError(this.keyStatus, 'Vui lòng nhập Voice ID'); return null; }
+  if (!this.apiKey) { this.showError(this.keyStatus, 'Vui lòng xác thực API key trước'); return null; }
+
+  // 1) Kiểm tra định dạng ID: 20–26 ký tự chữ/số
+  const id = raw.replace(/\s+/g, '');
+  if (!/^[A-Za-z0-9]{20,26}$/.test(id)) {
+    this.showError(this.keyStatus, 'Voice ID không đúng định dạng (20–26 ký tự chữ/số).');
     return null;
   }
 
@@ -929,15 +930,34 @@ document.querySelectorAll('.preset-voice-btn').forEach(btn => {
   this.addCustomVoiceBtn.textContent = 'Đang kiểm tra...';
 
   try {
-    const res = await fetch(`https://api.elevenlabs.io/v1/voices/${voiceId}`, {
-      headers: { 'xi-api-key': this.apiKey }
+    // 2) Thử lấy qua endpoint voices/{id}
+    let res = await fetch(`https://api.elevenlabs.io/v1/voices/${id}`, {
+      headers: { 'accept': 'application/json', 'xi-api-key': this.apiKey }
     });
-    if (!res.ok) throw new Error('Voice ID không hợp lệ hoặc không tồn tại');
 
-    const raw = await res.json();
-    const v = raw.voice ? raw.voice : raw;
+    // 3) Nếu 400/404, thử tìm trong shared-voices
+    if (!res.ok) {
+      const shared = await fetch('https://api.elevenlabs.io/v1/shared-voices', {
+        headers: { 'accept': 'application/json', 'xi-api-key': this.apiKey }
+      });
+      if (shared.ok) {
+        const js = await shared.json();
+        const v2 = (js.voices || []).find(v => v.voice_id === id);
+        if (v2) res = new Response(JSON.stringify(v2), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+    }
 
-    const existed = this.allVoices.find(x => x.voice_id === (v.voice_id || voiceId));
+    if (!res.ok) {
+      let detail = '';
+      try { const j = await res.json(); detail = j?.detail?.message || j?.message || ''; } catch {}
+      throw new Error(detail || `Không tìm thấy Voice ID "${id}" (HTTP ${res.status}).`);
+    }
+
+    const rawData = await res.json();
+    const v = rawData.voice ? rawData.voice : rawData;
+
+    // Đã tồn tại trong danh sách?
+    const existed = this.allVoices.find(x => x.voice_id === (v.voice_id || id));
     if (existed) {
       this.voiceSelect.value = existed.voice_id;
       this.voiceSelect.dispatchEvent(new Event('change'));
@@ -947,12 +967,10 @@ document.querySelectorAll('.preset-voice-btn').forEach(btn => {
       return existed;
     }
 
-    const lang = (v.labels && (v.labels.language || v.labels.lang))
-      ? (v.labels.language || v.labels.lang) : 'custom';
-
+    const lang = (v.labels && (v.labels.language || v.labels.lang)) ? (v.labels.language || v.labels.lang) : 'custom';
     const customVoice = {
-      voice_id: v.voice_id || voiceId,
-      name: v.name || `Custom ${voiceId.slice(0, 6)}`,
+      voice_id: v.voice_id || id,
+      name: v.name || `Custom ${id.slice(0, 6)}`,
       labels: { ...(v.labels || {}), language: lang },
       description: v.description || '',
       isCustom: true
@@ -969,10 +987,10 @@ document.querySelectorAll('.preset-voice-btn').forEach(btn => {
     this.showSuccess(this.keySuccess, `Đã thêm giọng "${customVoice.name}" thành công!`);
     this.customVoiceIdInput.value = '';
     this.saveCustomVoices();
-
     return customVoice;
+
   } catch (e) {
-    this.showError(this.keyStatus, 'Lỗi thêm giọng tùy chỉnh: ' + e.message);
+    this.showError(this.keyStatus, 'Lỗi thêm giọng: ' + e.message);
     return null;
   } finally {
     this.addCustomVoiceBtn.disabled = false;
@@ -1446,6 +1464,7 @@ if (this.savedApiKeys && Array.isArray(this.savedApiKeys) && this.savedApiKeys.l
 </body>
 
 </html>
+
 
 
 
