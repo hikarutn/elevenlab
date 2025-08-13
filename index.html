@@ -726,7 +726,114 @@ Ví dụ:
                 this.loadSettings();
                 this.updateModelInfo();
             }
+// Lấy voices thuộc tài khoản
+async fetchAccountVoices() {
+  const res = await fetch('https://api.elevenlabs.io/v1/voices', {
+    headers: { 'xi-api-key': this.apiKey }
+  });
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try { const j = await res.json(); msg += ` - ${j.detail?.message || JSON.stringify(j)}`; } catch {}
+    throw new Error(`Không lấy được voices của tài khoản: ${msg}`);
+  }
+  const data = await res.json();
+  return data.voices || [];
+}
 
+// Lấy shared voices (thư viện công khai)
+async fetchSharedVoices() {
+  const res = await fetch('https://api.elevenlabs.io/v1/shared-voices', {
+    headers: { 'xi-api-key': this.apiKey }
+  });
+  if (!res.ok) {
+    // shared có thể giới hạn/không cần thiết, không coi là lỗi chí tử
+    console.warn('Không lấy được shared voices:', res.status);
+    return [];
+  }
+  const data = await res.json();
+  // Đánh dấu shared để gắn nhãn
+  return (data.voices || []).map(v => ({ ...v, isShared: true, name: `${v.name} (Shared)` }));
+}
+
+// Gộp, sắp xếp, render ra select
+async refreshVoices(preferLang = 'vi') {
+  if (!this.apiKey) {
+    this.showError(this.keyStatus, 'Vui lòng xác thực API key trước');
+    return;
+  }
+  this.voiceStatus.textContent = 'Đang tải giọng...';
+
+  try {
+    const [myVoices, shared] = await Promise.all([
+      this.fetchAccountVoices(),
+      this.fetchSharedVoices()
+    ]);
+
+    // Nếu bạn đã có customVoices thì giữ lại
+    this.voices = myVoices || [];
+    const all = [...this.voices, ...shared, ...(this.customVoices || [])];
+
+    // Bảo vệ labels
+    all.forEach(v => {
+      v.labels = v.labels || {};
+      if (!v.labels.language) v.labels.language = v.isCustom ? 'vi' : (v.labels.lang || 'unknown');
+    });
+
+    // Ưu tiên vi -> en -> còn lại, rồi theo tên
+    const sorted = all.sort((a, b) => {
+      const aLang = a.labels.language || 'unknown';
+      const bLang = b.labels.language || 'unknown';
+      if (aLang === preferLang && bLang !== preferLang) return -1;
+      if (bLang === preferLang && aLang !== preferLang) return 1;
+      if (aLang === 'en' && bLang !== 'en' && bLang !== preferLang) return -1;
+      if (bLang === 'en' && aLang !== 'en' && aLang !== preferLang) return 1;
+      return (a.name || '').localeCompare(b.name || '');
+    });
+
+    // Render ra <select>
+    this.allVoices = sorted;
+    this.voiceSelect.innerHTML = '<option value="">Chọn giọng đọc...</option>';
+
+    const getLangLabel = l => ({
+      en:'English', vi:'Tiếng Việt', es:'Español', fr:'Français', de:'Deutsch',
+      it:'Italiano', pt:'Português', pl:'Polski', tr:'Türkçe', ru:'Русский',
+      nl:'Nederlands', cs:'Čeština', ar:'العربية', zh:'中文', ja:'日本語',
+      hi:'हिन्दी', ko:'한국어', unknown:'Không xác định'
+    }[l] || l || 'Không xác định');
+
+    sorted.forEach(v => {
+      const opt = document.createElement('option');
+      opt.value = v.voice_id;
+      let label = v.name || v.voice_id;
+      if (v.labels?.language) label += ` (${getLangLabel(v.labels.language)})`;
+      if (v.isCustom) label += ' - Tùy chỉnh';
+      if (v.isShared) label += ' - Chia sẻ';
+      opt.textContent = label;
+      opt.dataset.voice = JSON.stringify(v);
+      this.voiceSelect.appendChild(opt);
+    });
+
+    this.voiceCount.textContent = `${sorted.length} giọng đọc`;
+    this.voiceStatus.textContent = 'Đã tải tất cả giọng đọc';
+
+    // Nếu có giọng tiếng Việt, tự lọc & chọn cái đầu
+    this.languageFilter.value = 'vi';
+    this.filterVoices();
+    const firstVi = [...this.voiceSelect.options].find(
+      (o, i) => i>0 && JSON.parse(o.dataset.voice||'{}')?.labels?.language === 'vi'
+    );
+    if (firstVi) {
+      this.voiceSelect.value = firstVi.value;
+      this.voiceSelect.dispatchEvent(new Event('change'));
+    }
+  } catch (err) {
+    console.error(err);
+    this.voiceStatus.textContent = 'Lỗi tải giọng đọc';
+    this.showError(this.keyStatus, err.message);
+  }
+}
+
+            
             initializeElements() {
                 // API elements
                 this.apiKeyInput = document.getElementById('apiKey');
@@ -775,7 +882,7 @@ Ví dụ:
 
             bindEvents() {
                 // API key validation
-                this.validateKeyBtn.addEventListener('click', () => this.validateApiKey());
+                this.loadAllVoicesBtn.addEventListener('click', () => this.refreshVoices('vi'));
                 this.apiKeyInput.addEventListener('keypress', (e) => {
                     if (e.key === 'Enter') this.validateApiKey();
                 });
@@ -1068,6 +1175,8 @@ async validateApiKey() {
 
     this.populateVoices();
     this.enableControls();
+      await this.refreshVoices('vi'); // tự nạp và ưu tiên tiếng Việt
+
     this.voiceStatus.textContent = 'Đã tải giọng cơ bản';
 
     // Lưu nhiều key
@@ -1446,6 +1555,7 @@ if (this.savedApiKeys && Array.isArray(this.savedApiKeys) && this.savedApiKeys.l
 </body>
 
 </html>
+
 
 
 
