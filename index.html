@@ -709,6 +709,7 @@ Ví dụ:
 
     <script>
         class ElevenLabsTTS {
+            DEBUG = true; // đặt false nếu không muốn log
             constructor() {
                 this.apiKey = '';
                 this.apiKeys = [];        // danh sách tất cả API keys
@@ -1020,6 +1021,10 @@ document.querySelectorAll('.preset-voice-btn').forEach(btn => {
                     this.allVoicesLoaded = true;
 
                     this.populateVoices();
+                    this.languageFilter.value = 'all';
+                     this.filterVoices();
+                          if (this.DEBUG) console.log('[populate] allVoices:', this.allVoices.length);
+
                     this.voiceStatus.textContent = 'Đã tải tất cả giọng đọc';
                     this.showSuccess(this.keySuccess, `Đã tải ${this.allVoices.length} giọng đọc từ ElevenLabs!`);
 
@@ -1067,6 +1072,10 @@ async validateApiKey() {
     );
 
     this.populateVoices();
+    this.languageFilter.value = 'all';
+    this.filterVoices();
+        if (this.DEBUG) console.log('[populate] allVoices:', this.allVoices.length);
+
     this.enableControls();
     this.voiceStatus.textContent = 'Đã tải giọng cơ bản';
 
@@ -1084,43 +1093,44 @@ async validateApiKey() {
 populateVoices() {
   const sortedVoices = this.allVoices
     .map(v => {
+      // bảo đảm có labels & language
       if (!v.labels) v.labels = {};
       if (!v.labels.language) v.labels.language = v.isCustom ? 'vi' : 'unknown';
       return v;
     })
     .sort((a, b) => {
-      const aLang = a.labels.language || 'unknown';
-      const bLang = b.labels.language || 'unknown';
+      const aLang = (a.labels.language || 'unknown').toLowerCase();
+      const bLang = (b.labels.language || 'unknown').toLowerCase();
       if (aLang === 'vi' && bLang !== 'vi') return -1;
       if (bLang === 'vi' && aLang !== 'vi') return 1;
-      if (aLang === 'en' && bLang !== 'en' && bLang !== 'vi') return -1;
-      if (bLang === 'en' && aLang !== 'en' && aLang !== 'vi') return 1;
+      if (aLang === 'en' && !['en','vi'].includes(bLang)) return -1;
+      if (bLang === 'en' && !['en','vi'].includes(aLang)) return 1;
       return a.name.localeCompare(b.name);
     });
 
-  // render options
+  // render lại toàn bộ options
   this.voiceSelect.innerHTML = '<option value="">Chọn giọng đọc...</option>';
   sortedVoices.forEach(voice => {
-    const option = document.createElement('option');
-    option.value = voice.voice_id;
+    const opt = document.createElement('option');
+    opt.value = voice.voice_id;
 
     let label = voice.name;
-    if (voice.labels && voice.labels.language) {
-      label += ` (${this.getLanguageLabel(voice.labels.language)})`;
-    }
+    const lang = (voice.labels?.language || 'unknown').toLowerCase();
+    label += ` (${this.getLanguageLabel(lang)})`;
     if (voice.isCustom) label += ' - Tùy chỉnh';
     if (voice.isShared) label += ' - Chia sẻ';
 
-    option.textContent = label;
-    option.dataset.voice = JSON.stringify(voice);
-    this.voiceSelect.appendChild(option);
+    opt.textContent = label;
+    opt.dataset.voice = JSON.stringify(voice);
+    this.voiceSelect.appendChild(opt);
   });
 
   this.voiceCount.textContent = `${this.allVoices.length} giọng đọc`;
-  this.filterVoices();
-} // <-- KẾT THÚC populateVoices()
+}
+
 
 getLanguageLabel(lang) {
+  const k = (lang || 'unknown').toLowerCase();
   const labels = {
     en: 'English', vi: 'Tiếng Việt', es: 'Español', fr: 'Français',
     de: 'Deutsch', it: 'Italiano', pt: 'Português', pl: 'Polski',
@@ -1128,38 +1138,64 @@ getLanguageLabel(lang) {
     ar: 'العربية', zh: '中文', ja: '日本語', hi: 'हिन्दी', ko: '한국어',
     unknown: 'Không xác định'
   };
-  return labels[lang] || lang || 'Không xác định';
+  return labels[k] || lang || 'Không xác định';
 }
+
 
 filterVoices() {
-  const filter = this.languageFilter.value;
-  const searchTerm = this.voiceSearch.value.toLowerCase();
-  const options = this.voiceSelect.querySelectorAll('option');
+  const filter = (this.languageFilter.value || 'all').toLowerCase();
+  const searchTerm = (this.voiceSearch.value || '').toLowerCase();
 
-  options.forEach((option, index) => {
-    if (index === 0) return;
+  let visible = 0;
+  const options = Array.from(this.voiceSelect.options);
+
+  options.forEach((option, idx) => {
+    if (idx === 0) return; // bỏ placeholder
 
     const voice = JSON.parse(option.dataset.voice || '{}');
-    const voiceLang = (voice.labels && voice.labels.language) ? voice.labels.language : 'unknown';
+    const voiceLang = (voice.labels?.language || 'unknown').toLowerCase();
     const voiceName = (voice.name || '').toLowerCase();
 
-    let showByLanguage = true;
-    let showBySearch = true;
+    // unknown KHÔNG bị loại khi lọc theo ngôn ngữ (để tránh rỗng)
+    let showByLanguage =
+      filter === 'all'
+        ? true
+        : (filter === 'custom'
+            ? !!voice.isCustom
+            : (voiceLang === filter || voiceLang === 'unknown'));
 
-    if (filter === 'custom') {
-      showByLanguage = !!voice.isCustom;
-    } else if (filter !== 'all') {
-      showByLanguage = voiceLang === filter;
-    }
+    let showBySearch = !searchTerm || voiceName.includes(searchTerm);
 
-    if (searchTerm) {
-      showBySearch = voiceName.includes(searchTerm);
-    }
-
-    option.style.display = (showByLanguage && showBySearch) ? '' : 'none';
+    // Ẩn/hiện option
+    option.hidden = !(showByLanguage && showBySearch);
+    if (!option.hidden) visible++;
   });
+
+  // nếu vì filter=vi mà visible = 0 ⇒ tự động chuyển về "all"
+  if (visible === 0 && filter !== 'all') {
+    this.languageFilter.value = 'all';
+    if (this.DEBUG) console.log('[filter] không thấy giọng, tự chuyển về ALL');
+    this.filterVoices();
+    return;
+  }
+
+  // nếu chưa chọn giọng nào, chọn option đầu tiên đang hiển thị
+  if (!this.voiceSelect.value) {
+    const firstVisible = options.find((o, i) => i > 0 && !o.hidden);
+    if (firstVisible) {
+      this.voiceSelect.value = firstVisible.value;
+      this.voiceSelect.dispatchEvent(new Event('change'));
+    }
+  }
+
+  this.voiceStatus.textContent = visible > 0
+    ? `Đang hiển thị ${visible} giọng`
+    : 'Không có giọng phù hợp';
 }
 
+
+
+            
 searchVoices() {
   this.filterVoices();
 }
@@ -1446,6 +1482,7 @@ if (this.savedApiKeys && Array.isArray(this.savedApiKeys) && this.savedApiKeys.l
 </body>
 
 </html>
+
 
 
 
